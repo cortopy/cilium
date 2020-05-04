@@ -16,12 +16,21 @@ package container
 
 import (
 	"context"
+	"errors"
+	"io"
 	"sync/atomic"
 	"unsafe"
 
 	v1 "github.com/cilium/cilium/pkg/hubble/api/v1"
 	"github.com/cilium/cilium/pkg/hubble/math"
 	"github.com/cilium/cilium/pkg/lock"
+)
+
+var (
+	// ErrConcurrentWrite indicates that a value was overwritten
+	ErrConcurrentWrite = errors.New("concurrent write detected")
+	// ErrEndOfBuffer is an alias for io.EOF
+	ErrEndOfBuffer = io.EOF
 )
 
 // Ring is a ring buffer that stores *v1.Event
@@ -38,6 +47,8 @@ type Ring struct {
 	cycleExp uint8
 	// cycleMask is the mask used to calculate the correct cycle of a position.
 	cycleMask uint64
+	// halfCycle is half the total number of cycles
+	halfCycle uint64
 	// dataLen is the length of the internal buffer.
 	dataLen uint64
 	// data is the internal buffer of this ring buffer.
@@ -66,10 +77,14 @@ func NewRing(n int) *Ring {
 	l := math.GetMask(msb)
 	dataLen := uint64(l + 1)
 	cycleExp := uint8(math.MSB(l+1)) - 1
+	// half cycle is (^uint64(0)/dataLen)/2 == (^uint64(0)>>cycleExp)>>1
+	halfCycle := (^uint64(0) >> cycleExp) >> 1
+
 	return &Ring{
 		mask:      l,
 		cycleExp:  cycleExp,
 		cycleMask: ^uint64(0) >> cycleExp,
+		halfCycle: halfCycle,
 		dataLen:   dataLen,
 		data:      make([]*v1.Event, dataLen, dataLen),
 		notifyMu:  lock.Mutex{},
@@ -153,9 +168,12 @@ func (r *Ring) LastWrite() uint64 {
 	return atomic.LoadUint64(&r.write) - 1
 }
 
-// read reads the *v1.Event from the given read position. Returns false if
-// that position is no longer available to be read, returns true otherwise.
-func (r *Ring) read(read uint64) (*v1.Event, bool) {
+// read reads the *v1.Event from the given read position. Returns an error if
+// the position is not valid. A position is invalid either because it has
+// already been overwritten by the writer (in which case ErrConcurrentWrite is
+// returned) or because the position is past the end of the ring buffer
+// (in which case ErrEndOfBuffer is returned).
+func (r *Ring) read(read uint64) (*v1.Event, error) {
 	readIdx := read & r.mask
 	event := r.dataLoadAtomic(readIdx)
 
@@ -180,11 +198,34 @@ func (r *Ring) read(read uint64) (*v1.Event, bool) {
 	// cycle: 1f 1f 1f 1f 1f 1f 1f 1f  0  0  0  0  0  0  0  0  1  1  1  1  1  1  1  1
 	readCycle := read >> r.cycleExp
 	writeCycle := lastWrite >> r.cycleExp
-	if (readCycle == writeCycle && readIdx < lastWriteIdx) ||
-		(readCycle == (writeCycle-1)&r.cycleMask && readIdx > lastWriteIdx) {
-		return event, true
+
+	prevWriteCycle := (writeCycle - 1) & r.cycleMask
+	maxWriteCycle := (writeCycle + r.halfCycle) & r.cycleMask
+
+	switch {
+	// Case: Reader in current cycle and accessing valid indices
+	case readCycle == writeCycle && readIdx < lastWriteIdx:
+		if event == nil {
+			// This case should never happen, as the writer must never write
+			// a nil value. In case it happens anyway, we just stop reading.
+			return nil, ErrEndOfBuffer
+		}
+		return event, nil
+	// Case: Reader in previous cycle and accessing valid indices
+	case readCycle == prevWriteCycle && readIdx > lastWriteIdx:
+		if event == nil {
+			// If the ring buffer is not yet fully populated, we treat nil
+			// as a value which is about to be overwritten
+			return nil, ErrConcurrentWrite
+		}
+		return event, nil
+	// Case: Reader ahead of writer
+	case readCycle >= writeCycle && readCycle < maxWriteCycle:
+		return nil, ErrEndOfBuffer
+	// Case: Reader behind writer
+	default:
+		return nil, ErrConcurrentWrite
 	}
-	return nil, false
 }
 
 // readFrom continues to read from the given position until the context is
@@ -194,10 +235,6 @@ func (r *Ring) readFrom(ctx context.Context, read uint64) <-chan *v1.Event {
 	const returnedBufferChLen = 1000
 	ch := make(chan *v1.Event, returnedBufferChLen)
 	go func() {
-		// halfCycle is the middle of a cycle.
-		// a half cycle is (^uint64(0)/r.dataLen)/2
-		// which translates into (^uint64(0)>>r.dataLen)>>1
-		halfCycle := (^uint64(0) >> r.cycleExp) >> 1
 		defer func() {
 			close(ch)
 		}()
@@ -260,7 +297,7 @@ func (r *Ring) readFrom(ctx context.Context, read uint64) <-chan *v1.Event {
 			// write: f0 f1 f2 f3 f4 f5 f6 f7 f8 f9 fa fb fc fd fe ff  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
 			// index:  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
 			// cycle: 1f 1f 1f 1f 1f 1f 1f 1f 1f 1f 1f 1f 1f 1f 1f 1f  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
-			case event == nil || readCycle >= (writeCycle+1)&r.cycleMask && readCycle < (halfCycle+writeCycle)&r.cycleMask:
+			case event == nil || readCycle >= (writeCycle+1)&r.cycleMask && readCycle < (r.halfCycle+writeCycle)&r.cycleMask:
 				// The writer has already written a new event so there's no
 				// need to stop the reader.
 

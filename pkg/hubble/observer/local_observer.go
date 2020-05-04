@@ -392,13 +392,17 @@ func (r *flowsReader) Next(ctx context.Context) (*pb.Flow, error) {
 		default:
 		}
 		var e *v1.Event
+		var err error
 		if r.follow {
 			e = r.ringReader.NextFollow(ctx)
 		} else {
 			if r.maxFlows > 0 && (r.flowsCount >= r.maxFlows) {
 				return nil, io.EOF
 			}
-			e = r.ringReader.Next()
+			e, err = r.ringReader.Next()
+			if err != nil {
+				return nil, err
+			}
 		}
 		if e == nil {
 			return nil, io.EOF
@@ -450,8 +454,9 @@ func newRingReader(ring *container.Ring, req *observerpb.GetFlowsRequest, whitel
 	// In order to avoid buffering events, we have to rewind first to find the
 	// correct index, then create a new reader that starts from there
 	for i := ring.Len(); i > 0; i, idx = i-1, idx-1 {
-		e := reader.Previous()
-		if e == nil {
+		e, err := reader.Previous()
+		if err != nil {
+			idx++ // we went backward 1 too far
 			break
 		}
 		_, ok := e.Event.(*pb.Flow)

@@ -98,11 +98,11 @@ func TestRing_Read(t *testing.T) {
 		read uint64
 	}
 	tests := []struct {
-		name   string
-		fields fields
-		args   args
-		want   *v1.Event
-		want1  bool
+		name    string
+		fields  fields
+		args    args
+		want    *v1.Event
+		wantErr error
 	}{
 		{
 			name: "normal read for the index 7",
@@ -125,8 +125,8 @@ func TestRing_Read(t *testing.T) {
 			args: args{
 				read: 0x7,
 			},
-			want:  &v1.Event{Timestamp: &timestamp.Timestamp{Seconds: 7}},
-			want1: true,
+			want:    &v1.Event{Timestamp: &timestamp.Timestamp{Seconds: 7}},
+			wantErr: nil,
 		},
 		{
 			name: "we can't read index 0 since we just wrote into it",
@@ -149,8 +149,8 @@ func TestRing_Read(t *testing.T) {
 			args: args{
 				read: 0x0,
 			},
-			want:  nil,
-			want1: false,
+			want:    nil,
+			wantErr: ErrConcurrentWrite,
 		},
 		{
 			name: "we can't read index 0x7 since we are one writing cycle ahead",
@@ -174,8 +174,8 @@ func TestRing_Read(t *testing.T) {
 				// The next possible entry that we can read is 0x10-0x7-0x1 = 0x8 (idx: 0)
 				read: 0x7,
 			},
-			want:  nil,
-			want1: false,
+			want:    nil,
+			wantErr: ErrConcurrentWrite,
 		},
 		{
 			name: "we can read index 0x8 since it's the last entry that we can read in this cycle",
@@ -199,8 +199,8 @@ func TestRing_Read(t *testing.T) {
 				// The next possible entry that we can read is 0x10-0x7-0x1 = 0x8 (idx: 0)
 				read: 0x8,
 			},
-			want:  &v1.Event{Timestamp: &timestamp.Timestamp{Seconds: 0}},
-			want1: true,
+			want:    &v1.Event{Timestamp: &timestamp.Timestamp{Seconds: 0}},
+			wantErr: nil,
 		},
 		{
 			name: "we overflow write and we are trying to read the previous writes, that we can't",
@@ -225,8 +225,8 @@ func TestRing_Read(t *testing.T) {
 				// next to be read: ^uint64(0) (idx: 7), last read: 0xfffffffffffffffe (idx: 6)
 				read: ^uint64(0),
 			},
-			want:  nil,
-			want1: false,
+			want:    nil,
+			wantErr: ErrConcurrentWrite,
 		},
 		{
 			name: "we overflow write and we are trying to read the previous writes, that we can",
@@ -250,8 +250,8 @@ func TestRing_Read(t *testing.T) {
 				// next to be read: ^uint64(0) (idx: 7), last read: 0xfffffffffffffffe (idx: 6)
 				read: ^uint64(0),
 			},
-			want:  &v1.Event{Timestamp: &timestamp.Timestamp{Seconds: 7}},
-			want1: true,
+			want:    &v1.Event{Timestamp: &timestamp.Timestamp{Seconds: 7}},
+			wantErr: nil,
 		},
 		{
 			name: "we overflow write and we are trying to read the 2 previously cycles",
@@ -277,8 +277,8 @@ func TestRing_Read(t *testing.T) {
 				// with a cycle that was already overwritten
 				read: ^uint64(0) - 0x7,
 			},
-			want:  nil,
-			want1: false,
+			want:    nil,
+			wantErr: ErrConcurrentWrite,
 		},
 	}
 	for _, tt := range tests {
@@ -295,8 +295,8 @@ func TestRing_Read(t *testing.T) {
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Ring.read() got = %v, want %v", got, tt.want)
 			}
-			if got1 != tt.want1 {
-				t.Errorf("Ring.read() got1 = %v, want %v", got1, tt.want1)
+			if got1 != tt.wantErr {
+				t.Errorf("Ring.read() got1 = %v, want %v", got1, tt.wantErr)
 			}
 		})
 	}
@@ -503,20 +503,17 @@ func TestRingFunctionalityInParallel(t *testing.T) {
 		t.Errorf("lastWrite should be 0x0. Got %x", lastWrite)
 	}
 
-	entry, ok := r.read(lastWrite)
-	if !ok {
-		t.Errorf("Should be able to read position %x", lastWrite)
+	entry, err := r.read(lastWrite)
+	if err != nil {
+		t.Errorf("Should be able to read position %x, got %v", lastWrite, err)
 	}
 	if entry.Timestamp.Seconds != int64(0) {
 		t.Errorf("Read Event should be %+v, got %+v instead", &timestamp.Timestamp{Seconds: 0}, entry.Timestamp)
 	}
 	lastWrite--
-	entry, ok = r.read(lastWrite)
-	if !ok {
-		t.Errorf("Should be able to read position %x", lastWrite)
-	}
-	if entry != nil {
-		t.Errorf("Read Event should be %+v, got %+v instead", nil, entry)
+	entry, err = r.read(lastWrite)
+	if err != ErrConcurrentWrite {
+		t.Errorf("Should not be able to read position %x, got %v", lastWrite, err)
 	}
 }
 
@@ -545,14 +542,14 @@ func TestRingFunctionalitySerialized(t *testing.T) {
 		t.Errorf("lastWrite should be 0x1. Got %x", lastWrite)
 	}
 
-	entry, ok := r.read(lastWrite)
-	if ok {
-		t.Errorf("Should not be able to read position %x", lastWrite)
+	entry, err := r.read(lastWrite)
+	if err != ErrEndOfBuffer {
+		t.Errorf("Should not be able to read position %x, got %v", lastWrite, err)
 	}
 	lastWrite--
-	entry, ok = r.read(lastWrite)
-	if !ok {
-		t.Errorf("Should be able to read position %x", lastWrite)
+	entry, err = r.read(lastWrite)
+	if err != nil {
+		t.Errorf("Should be able to read position %x, got %v", lastWrite, err)
 	}
 	if entry.Timestamp.Seconds != int64(0) {
 		t.Errorf("Read Event should be %+v, got %+v instead", &timestamp.Timestamp{Seconds: 0}, entry.Timestamp)
