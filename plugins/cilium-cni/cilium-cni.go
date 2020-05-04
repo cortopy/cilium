@@ -30,11 +30,11 @@ import (
 	datapathOption "github.com/cilium/cilium/pkg/datapath/option"
 	"github.com/cilium/cilium/pkg/defaults"
 	endpointid "github.com/cilium/cilium/pkg/endpoint/id"
+	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/netns"
-	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/sysctl"
 	"github.com/cilium/cilium/pkg/uuid"
 	"github.com/cilium/cilium/pkg/version"
@@ -485,14 +485,14 @@ func cmdAdd(args *skel.CmdArgs) (err error) {
 	}
 
 	switch conf.IpamMode {
-	case option.IPAMENI:
+	case ipamOption.IPAMENI:
 		err = eniAdd(ipConfig, ipam.IPV4, conf)
 		if err != nil {
 			err = fmt.Errorf("unable to setup ENI datapath: %s", err)
 			return
 		}
 
-	case option.IPAMAzure:
+	case ipamOption.IPAMAzure:
 		// No specific action is required. The standard veth based
 		// approach is selected for now. The agent will set up the
 		// routes as necessary.

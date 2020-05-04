@@ -35,6 +35,7 @@ import (
 	healthDefaults "github.com/cilium/cilium/pkg/health/defaults"
 	"github.com/cilium/cilium/pkg/health/probe"
 	"github.com/cilium/cilium/pkg/identity/cache"
+	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/launcher"
 	"github.com/cilium/cilium/pkg/logging/logfields"
@@ -345,7 +346,7 @@ func LaunchAsEndpoint(baseCtx context.Context,
 		return nil, fmt.Errorf("Error while configuring routes: %s", err)
 	}
 
-	if option.Config.IPAM == option.IPAMENI {
+	if option.Config.IPAM == ipamOption.IPAMENI {
 		if err := enirouting.Install(healthIP,
 			eniHealthRouting,
 			mtuConfig.GetDeviceMTU(),

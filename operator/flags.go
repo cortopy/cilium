@@ -21,6 +21,7 @@ import (
 	operatorMetrics "github.com/cilium/cilium/operator/metrics"
 	operatorOption "github.com/cilium/cilium/operator/option"
 	"github.com/cilium/cilium/pkg/defaults"
+	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
 	"github.com/cilium/cilium/pkg/option"
 
 	"github.com/spf13/cobra"
@@ -137,7 +138,7 @@ func init() {
 	flags.Bool(operatorOption.EnableMetrics, false, "Enable Prometheus metrics")
 	option.BindEnv(operatorOption.EnableMetrics)
 
-	flags.String(option.IPAM, option.IPAMHostScopeLegacy, "Backend to use for IPAM")
+	flags.String(option.IPAM, ipamOption.IPAMHostScopeLegacy, "Backend to use for IPAM")
 	option.BindEnv(option.IPAM)
 
 	flags.Duration(operatorOption.IdentityHeartbeatTimeout, 15*time.Minute, "Timeout after which identity expires on lack of heartbeat")

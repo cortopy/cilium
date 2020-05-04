@@ -24,6 +24,7 @@ import (
 	operatorOption "github.com/cilium/cilium/operator/option"
 	"github.com/cilium/cilium/pkg/components"
 	"github.com/cilium/cilium/pkg/ipam"
+	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
 	"github.com/cilium/cilium/pkg/k8s"
 	clientset "github.com/cilium/cilium/pkg/k8s/client/clientset/versioned"
 	"github.com/cilium/cilium/pkg/k8s/types"
@@ -164,7 +165,7 @@ func runOperator(cmd *cobra.Command) {
 	)
 
 	switch option.Config.IPAM {
-	case option.IPAMENI:
+	case ipamOption.IPAMENI:
 		ipamAllocatorAWS, providerBuiltin := allocatorProviders["aws"]
 		if !providerBuiltin {
 			log.WithError(err).Fatal("AWS ENI allocator is not supported by this version of cilium-operator")
@@ -180,7 +181,7 @@ func runOperator(cmd *cobra.Command) {
 		}
 
 		startSynchronizingCiliumNodes(nodeManager)
-	case option.IPAMAzure:
+	case ipamOption.IPAMAzure:
 		ipamAllocatorAzure, providerBuiltin := allocatorProviders["azure"]
 		if !providerBuiltin {
 			log.WithError(err).Fatal("Azure allocator is not supported by this version of cilium-operator")
